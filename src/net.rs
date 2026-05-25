@@ -6,7 +6,7 @@ use std::time::Duration;
 const DEST_PORT: u16 = 33434;
 const READ_TIMEOUT_SECS: u64 = 2;
 
-pub fn probe_v4(target: Ipv4Addr, ttl: u32) -> std::io::Result<Option<Ipv4Addr>> {
+pub fn probe(target: Ipv4Addr, ttl: u32) -> std::io::Result<Option<Ipv4Addr>> {
     let send_sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     send_sock.set_ttl_v4(ttl)?;
 
@@ -32,4 +32,14 @@ pub fn probe_v4(target: Ipv4Addr, ttl: u32) -> std::io::Result<Option<Ipv4Addr>>
         }
         Err(_) => Ok(None),
     }
+}
+use std::net::{IpAddr, ToSocketAddrs};
+
+pub fn resolve_host(host: &str) -> std::io::Result<Vec<IpAddr>> {
+    let addrs = (host, 0)
+        .to_socket_addrs()?
+        .map(|addr| addr.ip())
+        .collect::<std::collections::HashSet<_>>();
+
+    Ok(addrs.into_iter().collect())
 }

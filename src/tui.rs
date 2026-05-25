@@ -84,9 +84,11 @@ pub fn run_tui(config: &Config, rx: Receiver<OverlayEvent>) -> Result<(), Box<dy
                     .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
                     .split(chunks[1]);
 
-                let info =
-                    Paragraph::new(format!("Target IPv4: {} | Press 'q' to quit", config.ip))
-                        .block(Block::default().borders(Borders::ALL).title("Information"));
+                let info = Paragraph::new(format!(
+                    "Target: {} (IPv4: {}) | Press 'q' to quit",
+                    config.target, config.target_ip
+                ))
+                .block(Block::default().borders(Borders::ALL).title("Information"));
 
                 let map = Canvas::default()
                     .block(Block::default().borders(Borders::ALL).title("Map"))

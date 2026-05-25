@@ -1,8 +1,8 @@
 use clap::Parser;
 use std::error::Error;
 use std::fmt::Display;
-use std::net::Ipv4Addr;
-use std::str::FromStr;
+use std::net::{IpAddr, Ipv4Addr};
+
 use std::sync::mpsc;
 use std::thread;
 
@@ -17,22 +17,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let config = parse_and_validate()?;
     let (tx, rx) = mpsc::channel::<tui::OverlayEvent>();
 
-    spawn_traceroute_worker(config.ip.clone(), tx);
+    spawn_traceroute_worker(config.target_ip, tx);
 
     tui::run_tui(&config, rx)
 }
 
-fn spawn_traceroute_worker(target_ip: String, tx: OverlayTx) {
+fn spawn_traceroute_worker(target: Ipv4Addr, tx: OverlayTx) {
     thread::spawn(move || {
-        let target = match Ipv4Addr::from_str(&target_ip) {
-            Ok(ip) => ip,
-            Err(err) => {
-                let _ = send_hop(&tx, format!("target parse error: {err}"));
-                return;
-            }
-        };
-
-        run_traceroute(target, &tx, net::probe_v4);
+        run_traceroute(target, &tx, net::probe);
     });
 }
 
@@ -99,21 +91,37 @@ fn send_hop(tx: &OverlayTx, line: impl Into<String>) -> bool {
 #[derive(Parser, Debug)]
 #[command(name = "atlas-rewrite", version, about = "Atlas")]
 struct Cli {
-    /// Target IPv4 address
-    ip: String,
+    /// Target IPv4 address or domain name
+    target: String,
 }
 
 #[derive(Debug)]
 pub struct Config {
-    pub ip: String,
+    pub target: String,
+    pub target_ip: Ipv4Addr,
 }
 
 fn parse_and_validate() -> Result<Config, Box<dyn Error>> {
     let cli = Cli::parse();
 
-    cli.ip
-        .parse::<Ipv4Addr>()
-        .map_err(|e| format!("Invalid IPv4 address '{}': {}", cli.ip, e))?;
+    let target_ip = match cli.target.parse::<Ipv4Addr>() {
+        Ok(ip) => ip,
+        Err(_) => {
+            let addrs = net::resolve_host(&cli.target)
+                .map_err(|e| format!("Failed to resolve host '{}': {}", cli.target, e))?;
 
-    Ok(Config { ip: cli.ip })
+            addrs
+                .into_iter()
+                .find_map(|addr| match addr {
+                    IpAddr::V4(ip) => Some(ip),
+                    IpAddr::V6(_) => None,
+                })
+                .ok_or_else(|| format!("No IPv4 address found for host '{}'", cli.target))?
+        }
+    };
+
+    Ok(Config {
+        target: cli.target,
+        target_ip,
+    })
 }
