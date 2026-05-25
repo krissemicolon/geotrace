@@ -53,18 +53,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas-rewrite"
-version = "0.1.0"
-dependencies = [
- "clap",
- "crossterm",
- "curl",
- "libc",
- "socket2",
- "tui",
-]
-
-[[package]]
 name = "bitflags"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -214,6 +202,18 @@ name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
+
+[[package]]
+name = "geotrace"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "crossterm",
+ "curl",
+ "libc",
+ "socket2",
+ "tui",
+]
 
 [[package]]
 name = "heck"
