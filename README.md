@@ -8,7 +8,7 @@
 cargo install geotrace
 ```
 
-## Usage
+## Usage (Requires Root Permissions)
 ```bash
-geotrace (--v4[default] or --v6) <target>
+geotrace <target>
 ```
