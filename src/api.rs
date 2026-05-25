@@ -1,4 +1,5 @@
 use curl::easy::Easy;
+use serde::Deserialize;
 
 pub type Coord = (f64, f64);
 
@@ -6,13 +7,24 @@ pub type Coord = (f64, f64);
 pub struct GeoInfo {
     pub continent_code: String,
     pub country: String,
+    pub city: String,
     pub coord: Coord,
+}
+
+#[derive(Debug, Deserialize)]
+struct IpApiGeoResponse {
+    #[serde(rename = "continentCode")]
+    continent_code: String,
+    country: String,
+    city: String,
+    lat: f64,
+    lon: f64,
 }
 
 pub fn lookup_geo_info(host: &str) -> Result<GeoInfo, String> {
     let mut easy = Easy::new();
     let mut body = Vec::new();
-    let url = format!("http://ip-api.com/line/{host}?fields=continentCode,country,lat,lon");
+    let url = format!("http://ip-api.com/json/{host}?fields=continentCode,country,city,lat,lon");
 
     easy.url(&url)
         .map_err(|e| format!("failed to set geo url: {e}"))?;
@@ -31,38 +43,13 @@ pub fn lookup_geo_info(host: &str) -> Result<GeoInfo, String> {
             .map_err(|e| format!("geo request failed: {e}"))?;
     }
 
-    let text = String::from_utf8(body).map_err(|e| format!("invalid utf8 in geo response: {e}"))?;
-    let mut lines = text.lines();
-
-    let continent_code = lines
-        .next()
-        .ok_or_else(|| "missing continent code in geo response".to_string())?
-        .trim()
-        .to_string();
-
-    let country = lines
-        .next()
-        .ok_or_else(|| "missing country in geo response".to_string())?
-        .trim()
-        .to_string();
-
-    let lat: f64 = lines
-        .next()
-        .ok_or_else(|| "missing latitude in geo response".to_string())?
-        .trim()
-        .parse()
-        .map_err(|e| format!("invalid latitude in geo response: {e}"))?;
-
-    let lon: f64 = lines
-        .next()
-        .ok_or_else(|| "missing longitude in geo response".to_string())?
-        .trim()
-        .parse()
-        .map_err(|e| format!("invalid longitude in geo response: {e}"))?;
+    let response: IpApiGeoResponse =
+        serde_json::from_slice(&body).map_err(|e| format!("invalid json in geo response: {e}"))?;
 
     Ok(GeoInfo {
-        continent_code,
-        country,
-        coord: (lon, lat),
+        continent_code: response.continent_code,
+        country: response.country,
+        city: response.city,
+        coord: (response.lon, response.lat),
     })
 }
