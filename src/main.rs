@@ -1,154 +1,112 @@
+use clap::{ArgAction, Parser};
 use std::error::Error;
+use std::fmt::Display;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
 
-use clap::{ArgAction, Parser};
-
 mod api;
 mod net;
 mod tui;
 
+const MAX_TTL: u32 = 30;
+type OverlayTx = mpsc::Sender<tui::OverlayEvent>;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let config = parse_and_validate()?;
-
     let (tx, rx) = mpsc::channel::<tui::OverlayEvent>();
-    let worker_mode = config.mode;
-    let worker_ip = config.ip.clone();
 
-    thread::spawn(move || {
-        let send_hop = |line: String, tx: &mpsc::Sender<tui::OverlayEvent>| {
-            tx.send(tui::OverlayEvent::AddHop(line)).is_ok()
+    spawn_traceroute_worker(config.mode, config.ip.clone(), tx);
+
+    tui::run_tui(&config, rx)
+}
+
+fn spawn_traceroute_worker(mode: Mode, target_ip: String, tx: OverlayTx) {
+    thread::spawn(move || match mode {
+        Mode::V4 => {
+            let target = match Ipv4Addr::from_str(&target_ip) {
+                Ok(ip) => ip,
+                Err(err) => {
+                    let _ = send_hop(&tx, format!("target parse error: {err}"));
+                    return;
+                }
+            };
+
+            run_traceroute(target, &tx, net::probe_v4);
+        }
+        Mode::V6 => {
+            let target = match Ipv6Addr::from_str(&target_ip) {
+                Ok(ip) => ip,
+                Err(err) => {
+                    let _ = send_hop(&tx, format!("target parse error: {err}"));
+                    return;
+                }
+            };
+
+            run_traceroute(target, &tx, net::probe_v6);
+        }
+    });
+}
+
+fn run_traceroute<T, F>(target: T, tx: &OverlayTx, mut probe: F)
+where
+    T: Copy + Eq + Display,
+    F: FnMut(T, u32) -> std::io::Result<Option<T>>,
+{
+    for ttl in 1..=MAX_TTL {
+        let hop = match probe(target, ttl) {
+            Ok(hop) => hop,
+            Err(err) => {
+                if !send_hop(tx, format!("{:>2}  ! {}", ttl, err)) {
+                    break;
+                }
+                continue;
+            }
         };
 
-        match worker_mode {
-            Mode::V4 => {
-                let target = match Ipv4Addr::from_str(&worker_ip) {
-                    Ok(ip) => ip,
-                    Err(err) => {
-                        let _ = tx.send(tui::OverlayEvent::AddHop(format!(
-                            "target parse error: {err}"
-                        )));
-                        return;
+        match hop {
+            Some(ip) => {
+                let hop_addr = ip.to_string();
+                match api::lookup_geo_info(&hop_addr) {
+                    Ok(geo) => {
+                        if !send_hop(
+                            tx,
+                            format!(
+                                "{:>2}  {} ({}, {})",
+                                ttl, ip, geo.continent_code, geo.country
+                            ),
+                        ) {
+                            break;
+                        }
+
+                        if tx.send(tui::OverlayEvent::AddPoint(geo.coord)).is_err() {
+                            break;
+                        }
                     }
-                };
-
-                for ttl in 1..=30 {
-                    let hop = match net::probe_v4(target, ttl) {
-                        Ok(hop) => hop,
-                        Err(err) => {
-                            if !send_hop(format!("{:>2}  ! {}", ttl, err), &tx) {
-                                break;
-                            }
-                            continue;
-                        }
-                    };
-
-                    match hop {
-                        Some(ip) => {
-                            let hop_host = ip.to_string();
-                            match api::get_geo_from_host(&hop_host) {
-                                Ok(geo) => {
-                                    if !send_hop(
-                                        format!(
-                                            "{:>2}  {} ({}, {})",
-                                            ttl, ip, geo.continent_code, geo.country
-                                        ),
-                                        &tx,
-                                    ) {
-                                        break;
-                                    }
-
-                                    if tx.send(tui::OverlayEvent::AddPoint(geo.coord)).is_err() {
-                                        break;
-                                    }
-                                }
-                                Err(_) => {
-                                    if !send_hop(format!("{:>2}  {}", ttl, ip), &tx) {
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if ip == target {
-                                let _ = send_hop("Reached target".to_string(), &tx);
-                                break;
-                            }
-                        }
-                        None => {
-                            if !send_hop(format!("{:>2}  *", ttl), &tx) {
-                                break;
-                            }
+                    Err(_) => {
+                        if !send_hop(tx, format!("{:>2}  {}", ttl, ip)) {
+                            break;
                         }
                     }
                 }
+
+                if ip == target {
+                    let _ = send_hop(tx, "Reached target");
+                    break;
+                }
             }
-            Mode::V6 => {
-                let target = match Ipv6Addr::from_str(&worker_ip) {
-                    Ok(ip) => ip,
-                    Err(err) => {
-                        let _ = tx.send(tui::OverlayEvent::AddHop(format!(
-                            "target parse error: {err}"
-                        )));
-                        return;
-                    }
-                };
-
-                for ttl in 1..=30 {
-                    let hop = match net::probe_v6(target, ttl) {
-                        Ok(hop) => hop,
-                        Err(err) => {
-                            if !send_hop(format!("{:>2}  ! {}", ttl, err), &tx) {
-                                break;
-                            }
-                            continue;
-                        }
-                    };
-
-                    match hop {
-                        Some(ip) => {
-                            let hop_host = ip.to_string();
-                            match api::get_geo_from_host(&hop_host) {
-                                Ok(geo) => {
-                                    if !send_hop(
-                                        format!(
-                                            "{:>2}  {} ({}, {})",
-                                            ttl, ip, geo.continent_code, geo.country
-                                        ),
-                                        &tx,
-                                    ) {
-                                        break;
-                                    }
-
-                                    if tx.send(tui::OverlayEvent::AddPoint(geo.coord)).is_err() {
-                                        break;
-                                    }
-                                }
-                                Err(_) => {
-                                    if !send_hop(format!("{:>2}  {}", ttl, ip), &tx) {
-                                        break;
-                                    }
-                                }
-                            }
-
-                            if ip == target {
-                                let _ = send_hop("Reached target".to_string(), &tx);
-                                break;
-                            }
-                        }
-                        None => {
-                            if !send_hop(format!("{:>2}  *", ttl), &tx) {
-                                break;
-                            }
-                        }
-                    }
+            None => {
+                if !send_hop(tx, format!("{:>2}  *", ttl)) {
+                    break;
                 }
             }
         }
-    });
+    }
+}
 
-    tui::run_tui(&config, rx)
+fn send_hop(tx: &OverlayTx, line: impl Into<String>) -> bool {
+    tx.send(tui::OverlayEvent::AddHop(line.into())).is_ok()
 }
 
 #[derive(PartialEq, Debug, Clone, Copy)]

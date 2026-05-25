@@ -9,7 +9,7 @@ pub struct GeoInfo {
     pub coord: Coord,
 }
 
-pub fn get_geo_from_host(host: &str) -> Result<GeoInfo, String> {
+pub fn lookup_geo_info(host: &str) -> Result<GeoInfo, String> {
     let mut easy = Easy::new();
     let mut body = Vec::new();
     let url = format!("http://ip-api.com/line/{host}?fields=continentCode,country,lat,lon");
