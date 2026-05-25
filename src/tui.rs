@@ -6,9 +6,9 @@ use std::time::Duration;
 use ::tui::Terminal;
 use ::tui::backend::CrosstermBackend;
 use ::tui::layout::{Constraint, Direction, Layout};
-use ::tui::style::Color;
+use ::tui::style::{Color, Style};
 use ::tui::widgets::canvas::{Canvas, Line, Map, MapResolution, Points};
-use ::tui::widgets::{Block, Borders, Paragraph};
+use ::tui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -16,11 +16,11 @@ use crossterm::terminal::{
 };
 
 use crate::Config;
-
-pub type Coord = (f64, f64);
+use crate::api::Coord;
 
 pub enum OverlayEvent {
     AddPoint(Coord),
+    AddHop(String),
 }
 
 pub struct MapOverlay {
@@ -58,12 +58,14 @@ pub fn run_tui(config: &Config, rx: Receiver<OverlayEvent>) -> Result<(), Box<dy
     let mut terminal = Terminal::new(backend)?;
 
     let mut overlay = MapOverlay::new();
+    let mut hops: Vec<String> = Vec::new();
 
     let result = (|| -> Result<(), Box<dyn Error>> {
         loop {
             loop {
                 match rx.try_recv() {
                     Ok(OverlayEvent::AddPoint(coord)) => overlay.draw_point(coord),
+                    Ok(OverlayEvent::AddHop(line)) => hops.push(line),
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => break,
                 }
@@ -76,6 +78,11 @@ pub fn run_tui(config: &Config, rx: Receiver<OverlayEvent>) -> Result<(), Box<dy
                     .margin(1)
                     .constraints([Constraint::Length(3), Constraint::Min(1)].as_ref())
                     .split(size);
+
+                let body = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(70), Constraint::Percentage(30)].as_ref())
+                    .split(chunks[1]);
 
                 let info = Paragraph::new(format!(
                     "Target IP: {} | Mode: {} | Press 'q' to quit",
@@ -118,8 +125,21 @@ pub fn run_tui(config: &Config, rx: Receiver<OverlayEvent>) -> Result<(), Box<dy
                         }
                     });
 
+                let hop_items: Vec<ListItem> = hops
+                    .iter()
+                    .map(|line| ListItem::new(line.as_str()))
+                    .collect();
+
+                let hop_list = List::new(hop_items).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Traceroute Hops")
+                        .border_style(Style::default().fg(Color::LightYellow)),
+                );
+
                 f.render_widget(info, chunks[0]);
-                f.render_widget(map, chunks[1]);
+                f.render_widget(map, body[0]);
+                f.render_widget(hop_list, body[1]);
             })?;
 
             if event::poll(Duration::from_millis(200))? {

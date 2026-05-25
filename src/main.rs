@@ -1,31 +1,149 @@
 use std::error::Error;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use clap::{ArgAction, Parser};
 
+mod api;
+mod net;
 mod tui;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = parse_and_validate()?;
 
     let (tx, rx) = mpsc::channel::<tui::OverlayEvent>();
+    let worker_mode = config.mode;
+    let worker_ip = config.ip.clone();
 
     thread::spawn(move || {
-        let computed_points = [
-            (-122.4194, 37.7749), // SF
-            (-118.2437, 34.0522), // LA
-            (8.5411, 47.3744),    // Zurich
-            (-95.3698, 29.7604),  // Houston
-        ];
+        let send_hop = |line: String, tx: &mpsc::Sender<tui::OverlayEvent>| {
+            tx.send(tui::OverlayEvent::AddHop(line)).is_ok()
+        };
 
-        for point in computed_points {
-            thread::sleep(Duration::from_millis(800));
+        match worker_mode {
+            Mode::V4 => {
+                let target = match Ipv4Addr::from_str(&worker_ip) {
+                    Ok(ip) => ip,
+                    Err(err) => {
+                        let _ = tx.send(tui::OverlayEvent::AddHop(format!(
+                            "target parse error: {err}"
+                        )));
+                        return;
+                    }
+                };
 
-            if tx.send(tui::OverlayEvent::AddPoint(point)).is_err() {
-                break;
+                for ttl in 1..=30 {
+                    let hop = match net::probe_v4(target, ttl) {
+                        Ok(hop) => hop,
+                        Err(err) => {
+                            if !send_hop(format!("{:>2}  ! {}", ttl, err), &tx) {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+
+                    match hop {
+                        Some(ip) => {
+                            let hop_host = ip.to_string();
+                            match api::get_geo_from_host(&hop_host) {
+                                Ok(geo) => {
+                                    if !send_hop(
+                                        format!(
+                                            "{:>2}  {} ({}, {})",
+                                            ttl, ip, geo.continent_code, geo.country
+                                        ),
+                                        &tx,
+                                    ) {
+                                        break;
+                                    }
+
+                                    if tx.send(tui::OverlayEvent::AddPoint(geo.coord)).is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => {
+                                    if !send_hop(format!("{:>2}  {}", ttl, ip), &tx) {
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if ip == target {
+                                let _ = send_hop("Reached target".to_string(), &tx);
+                                break;
+                            }
+                        }
+                        None => {
+                            if !send_hop(format!("{:>2}  *", ttl), &tx) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            Mode::V6 => {
+                let target = match Ipv6Addr::from_str(&worker_ip) {
+                    Ok(ip) => ip,
+                    Err(err) => {
+                        let _ = tx.send(tui::OverlayEvent::AddHop(format!(
+                            "target parse error: {err}"
+                        )));
+                        return;
+                    }
+                };
+
+                for ttl in 1..=30 {
+                    let hop = match net::probe_v6(target, ttl) {
+                        Ok(hop) => hop,
+                        Err(err) => {
+                            if !send_hop(format!("{:>2}  ! {}", ttl, err), &tx) {
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+
+                    match hop {
+                        Some(ip) => {
+                            let hop_host = ip.to_string();
+                            match api::get_geo_from_host(&hop_host) {
+                                Ok(geo) => {
+                                    if !send_hop(
+                                        format!(
+                                            "{:>2}  {} ({}, {})",
+                                            ttl, ip, geo.continent_code, geo.country
+                                        ),
+                                        &tx,
+                                    ) {
+                                        break;
+                                    }
+
+                                    if tx.send(tui::OverlayEvent::AddPoint(geo.coord)).is_err() {
+                                        break;
+                                    }
+                                }
+                                Err(_) => {
+                                    if !send_hop(format!("{:>2}  {}", ttl, ip), &tx) {
+                                        break;
+                                    }
+                                }
+                            }
+
+                            if ip == target {
+                                let _ = send_hop("Reached target".to_string(), &tx);
+                                break;
+                            }
+                        }
+                        None => {
+                            if !send_hop(format!("{:>2}  *", ttl), &tx) {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
     });
@@ -33,7 +151,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     tui::run_tui(&config, rx)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum Mode {
     V4,
     V6,
@@ -49,7 +167,7 @@ impl Mode {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "atlas-rewrite", version, about = "Atlas rewrite TUI scaffold")]
+#[command(name = "atlas-rewrite", version, about = "Atlas")]
 struct Cli {
     /// Target IP address
     ip: String,
